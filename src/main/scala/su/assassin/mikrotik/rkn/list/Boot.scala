@@ -1,7 +1,5 @@
 package su.assassin.mikrotik.rkn.list
 
-import java.time.LocalDateTime
-
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -36,15 +34,14 @@ object Boot {
     log.info("Done!")
   }
 
-  def removeOld(toRemove: Map[String, Unit]): Unit = toRemove.headOption.foreach { _ =>
+  def removeOld(toRemove: Set[String]): Unit = toRemove.headOption.foreach { _ =>
     log.info(s"Start remove old addresses, ${toRemove.size}, may be very long...")
     toRemove
-      .view
       .grouped(removeGroupSize)
       .foldLeft(0) { case (count, toRemove) =>
         val resultCount = count + toRemove.size
         log.debug(s"Remove $count-$resultCount...")
-        val list = toRemove.map { case (ip, _) =>
+        val list = toRemove.map { ip =>
           s"""(list="$addressListName" && address="$ip")"""
         }.mkString(" || ")
         val removeCommand = Seq("ssh", s"$user@$address", s"""ip firewall address-list remove [find where $list]""")
@@ -54,19 +51,20 @@ object Boot {
     log.info("Dome removing")
   }
 
-  def addNew(toAdd: Map[String, Unit]): Unit = toAdd.headOption.foreach { _ =>
+  def addNew(toAdd: Set[String]): Unit = toAdd.headOption.foreach { _ =>
     log.info(s"Start adding new, ${toAdd.size}")
     toAdd
+      .toList
       .grouped(addGroupSize)
       .foldLeft(0) { case (count, toAdd) =>
         val resultCount = count + toAdd.size
         log.debug(s"Add $count-$resultCount...")
-        val addressList = toAdd.map { case (ip, _) =>
+        val addressList = toAdd.map { ip =>
           s"""ip firewall address-list add address=$ip list=$addressListName"""
         }.mkString("\n")
         val addCommand = Seq("ssh", s"$user@$address", addressList)
         addCommand.!!
-        count
+        resultCount
       }
     log.info("Adding done")
   }
@@ -76,25 +74,19 @@ object Boot {
     s"ssh $user@$address $doneSound".!!
   }
 
-  def generateRemoveList(oldList: Map[String, Unit], newList: Map[String, Unit]): Map[String, Unit] = {
+  def generateRemoveList(oldList: Set[String], newList: Set[String]): Set[String] = {
     log.info("Generating 'remove-list'")
-    oldList
-      .filter { case (ip, _) =>
-        newList.get(ip).isEmpty
-      }
+    oldList.diff(newList)
   }
 
-  def generateAddList(oldList: Map[String, Unit], newList: Map[String, Unit]): Map[String, Unit] = {
+  def generateAddList(oldList: Set[String], newList: Set[String]): Set[String] = {
     log.info("Generating 'add-list'")
-    newList
-      .filter { case (ip, _) =>
-        oldList.get(ip).isEmpty
-      }
+    newList.diff(oldList)
   }
 
-  def loadBlockedAddresses: Map[String, Unit] = {
+  def loadBlockedAddresses: Set[String] = {
     log.info(s"Start load blacklist from $blockedListUrl")
-    val result = scala.io.Source.fromURL(blockedListUrl, "windows-1251")
+    val baseData = scala.io.Source.fromURL(blockedListUrl, "windows-1251")
       .getLines()
       .flatMap { line =>
         line.split(";")
@@ -103,29 +95,54 @@ object Boot {
       .collect {
         case subnetRegex(ip) => ip
         case ipRegex(ip) => ip
-      }.map(_ -> ())
-      .toMap
-    log.info(s"Done load blacklist, loaded ${result.size} banned addresses")
-    result
+      }
+      .toSet
+    log.info(s"Done load blacklist, loaded ${baseData.size} banned addresses")
+
+    val data = baseData
+      .map(_.split("\\."))
+      .map { list =>
+        (list.take(3).mkString("."), list.last)
+      }
+      .toList
+      .groupBy(_._1)
+
+    val lowData = data
+      .filter(_._2.size < AppConfig.countAddressToCompress)
+      .flatMap { case (_, values) =>
+        values.map { case (one, last) =>
+          s"$one.$last"
+        }
+      }
+
+    val highData = data
+      .filter(_._2.size >= AppConfig.countAddressToCompress)
+      .map { case (first, _) =>
+        s"$first.0/24"
+      }
+
+    val result = highData ++ lowData
+
+    log.info(s"After compression left ${result.size} banned addresses")
+    result.toSet
   }
 
-  def loadExistsAddresses: Map[String, Unit] = {
+  def loadExistsAddresses: Set[String] = {
     log.info("Start ssh connect")
     val sshCommand =
       s"""ssh $user@$address ip firewall address-list print without-paging where list=$addressListName """.stripMargin
     log.debug(sshCommand)
-    val result: List[String] = sshCommand
+    val result = sshCommand
       .!!
       .split("\n")
-      .toList
+      .toIterator
     log.debug(s"Ssh connect done, readed ${result.length} rows")
     val addresses = result
-      .view
       .collect {
         case subnetRegex(ip) => ip
         case ipRegex(ip) => ip
-      }.map(_ -> ())
-      .toMap
+      }
+      .toSet
     log.info(s"Done ssh connect, loaded ${addresses.size} addresses")
     addresses
   }

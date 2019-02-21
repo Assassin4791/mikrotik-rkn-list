@@ -21,5 +21,6 @@ object AppConfig {
   val blockedListUrl: String = conf.getString("blockedListUrl")
   val removeGroupSize: Int = conf.getInt("removeGroupSize")
   val addGroupSize: Int = conf.getInt("addGroupSize")
+  val countAddressToCompress: Int = conf.getInt("countAddressToCompress")
   val doneSound: String = conf.getString("doneSound")
 }
