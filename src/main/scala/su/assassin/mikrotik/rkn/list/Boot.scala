@@ -44,8 +44,9 @@ object Boot {
         val list = toRemove.map { ip =>
           s"""(list="$addressListName" && address="$ip")"""
         }.mkString(" || ")
-        val removeCommand = Seq("ssh", s"$user@$address", s"""ip firewall address-list remove [find where $list]""")
-        removeCommand.!!
+        Seq("ssh", s"$user@$address", s"""ip firewall address-list remove [find where $list]""")
+          .lineStream
+          .foreach(value => log.debug("Remove output: " + value))
         resultCount
       }
     log.info("Dome removing")
@@ -62,8 +63,9 @@ object Boot {
         val addressList = toAdd.map { ip =>
           s"""ip firewall address-list add address=$ip list=$addressListName"""
         }.mkString("\n")
-        val addCommand = Seq("ssh", s"$user@$address", addressList)
-        addCommand.!!
+        Seq("ssh", s"$user@$address", addressList)
+          .lineStream
+          .foreach(value => log.debug("Add output: " + value))
         resultCount
       }
     log.info("Adding done")
@@ -122,7 +124,6 @@ object Boot {
       }
 
     val result = highData ++ lowData
-
     log.info(s"After compression left ${result.size} banned addresses")
     result.toSet
   }
@@ -132,15 +133,15 @@ object Boot {
     val sshCommand =
       s"""ssh $user@$address ip firewall address-list print without-paging where list=$addressListName """.stripMargin
     log.debug(sshCommand)
-    val result = sshCommand
-      .!!
-      .split("\n")
-      .toIterator
-    log.debug(s"Ssh connect done, readed ${result.length} rows")
-    val addresses = result
+    val addresses = sshCommand
+      .lineStream
       .collect {
         case subnetRegex(ip) => ip
         case ipRegex(ip) => ip
+      }
+      .map { value =>
+        log.debug("Loaded address: " + value)
+        value
       }
       .toSet
     log.info(s"Done ssh connect, loaded ${addresses.size} addresses")
