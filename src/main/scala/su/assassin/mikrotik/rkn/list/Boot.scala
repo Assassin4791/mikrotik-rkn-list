@@ -62,7 +62,7 @@ object Boot {
         log.debug(s"Add $count-$resultCount...")
         val addressList = toAdd.map { ip =>
           s"""ip firewall address-list add address=$ip list=$addressListName"""
-        }.mkString("\n")
+        }.mkString(";")
         Seq("ssh", s"$user@$address", addressList)
           .lineStream
           .foreach(value => log.debug("Add output: " + value))
